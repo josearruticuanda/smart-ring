@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IMU Viewer — BMI088</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 1rem; }
+  h1 { font-size: 18px; font-weight: 500; margin-bottom: 1rem; color: #fff; }
+  .top { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; }
+  button { background: transparent; border: 0.5px solid #444; color: #e0e0e0; padding: 8px 18px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+  button:hover { background: #1e1e1e; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .status { font-size: 13px; color: #888; }
+  .status.connected { color: #4caf50; }
+  .status.error { color: #f44336; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 1.5rem; }
+  .card { background: #1a1a1a; border: 0.5px solid #2a2a2a; border-radius: 10px; padding: 12px 14px; }
+  .card .label { font-size: 11px; color: #666; margin-bottom: 4px; letter-spacing: 0.05em; text-transform: uppercase; }
+  .card .value { font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .card.gyro .value { color: #7b8cff; }
+  .card.accel .value { color: #4db6ac; }
+  .card.temp .value { color: #ffa040; }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .chart-box { background: #1a1a1a; border: 0.5px solid #2a2a2a; border-radius: 10px; padding: 12px; }
+  .chart-box h2 { font-size: 13px; font-weight: 500; color: #888; margin-bottom: 10px; }
+  .chart-wrap { position: relative; height: 180px; }
+  @media (max-width: 600px) { .charts { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>BMI088 IMU viewer</h1>
+
+<div class="top">
+  <button id="connectBtn">Connect</button>
+  <span class="status" id="status">Disconnected</span>
+</div>
+
+<div class="cards">
+  <div class="card gyro"><div class="label">Gyro X (°/s)</div><div class="value" id="gx">—</div></div>
+  <div class="card gyro"><div class="label">Gyro Y (°/s)</div><div class="value" id="gy">—</div></div>
+  <div class="card gyro"><div class="label">Gyro Z (°/s)</div><div class="value" id="gz">—</div></div>
+  <div class="card accel"><div class="label">Accel X (g)</div><div class="value" id="ax">—</div></div>
+  <div class="card accel"><div class="label">Accel Y (g)</div><div class="value" id="ay">—</div></div>
+  <div class="card accel"><div class="label">Accel Z (g)</div><div class="value" id="az">—</div></div>
+  <div class="card temp"><div class="label">Temperature</div><div class="value" id="temp">—</div></div>
+</div>
+
+<div class="charts">
+  <div class="chart-box">
+    <h2>Gyroscope (°/s)</h2>
+    <div class="chart-wrap"><canvas id="gyroChart" role="img" aria-label="Live gyroscope X Y Z chart"></canvas></div>
+  </div>
+  <div class="chart-box">
+    <h2>Accelerometer (g)</h2>
+    <div class="chart-wrap"><canvas id="accelChart" role="img" aria-label="Live accelerometer X Y Z chart"></canvas></div>
+  </div>
+</div>
+
+<script>
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_TX      = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+
+const MAX_POINTS = 100;
+const labels = Array(MAX_POINTS).fill('');
+
+function makeChart(id, datasets) {
+  return new Chart(document.getElementById(id), {
+    type: 'line',
+    data: { labels: [...labels], datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: { legend: { display: false } },
+      elements: { point: { radius: 0 }, line: { borderWidth: 1.5, tension: 0.3 } },
+      scales: {
+        x: { display: false },
+        y: { grid: { color: '#222' }, ticks: { color: '#555', font: { size: 11 } } }
+      }
+    }
+  });
+}
+
+const gyroChart = makeChart('gyroChart', [
+  { label: 'X', data: Array(MAX_POINTS).fill(null), borderColor: '#7b8cff', borderDash: [] },
+  { label: 'Y', data: Array(MAX_POINTS).fill(null), borderColor: '#ff8a80', borderDash: [4,2] },
+  { label: 'Z', data: Array(MAX_POINTS).fill(null), borderColor: '#69f0ae', borderDash: [1,3] }
+]);
+
+const accelChart = makeChart('accelChart', [
+  { label: 'X', data: Array(MAX_POINTS).fill(null), borderColor: '#4db6ac', borderDash: [] },
+  { label: 'Y', data: Array(MAX_POINTS).fill(null), borderColor: '#ffb74d', borderDash: [4,2] },
+  { label: 'Z', data: Array(MAX_POINTS).fill(null), borderColor: '#ba68c8', borderDash: [1,3] }
+]);
+
+function push(chart, values) {
+  chart.data.datasets.forEach((ds, i) => {
+    ds.data.push(values[i]);
+    if (ds.data.length > MAX_POINTS) ds.data.shift();
+  });
+  chart.update('none');
+}
+
+let buffer = '';
+
+function parseLine(line) {
+  const parts = line.trim().split(',');
+  if (parts.length !== 7) return;
+  const [gx, gy, gz, ax, ay, az, t] = parts.map(Number);
+
+  const gxV = gx/1000, gyV = gy/1000, gzV = gz/1000;
+  const axV = ax/1000, ayV = ay/1000, azV = az/1000;
+  const tV  = t/1000;
+
+  document.getElementById('gx').textContent = gxV.toFixed(2);
+  document.getElementById('gy').textContent = gyV.toFixed(2);
+  document.getElementById('gz').textContent = gzV.toFixed(2);
+  document.getElementById('ax').textContent = axV.toFixed(3);
+  document.getElementById('ay').textContent = ayV.toFixed(3);
+  document.getElementById('az').textContent = azV.toFixed(3);
+  document.getElementById('temp').textContent = tV.toFixed(2) + ' °C';
+
+  push(gyroChart,  [gxV, gyV, gzV]);
+  push(accelChart, [axV, ayV, azV]);
+}
+
+function onData(event) {
+  const chunk = new TextDecoder().decode(event.target.value);
+  buffer += chunk;
+  const lines = buffer.split('\n');
+  buffer = lines.pop();
+  lines.forEach(parseLine);
+}
+
+async function connect() {
+  const btn = document.getElementById('connectBtn');
+  const status = document.getElementById('status');
+  try {
+    btn.disabled = true;
+    status.className = 'status';
+    status.textContent = 'Scanning...';
+
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'IMU-BMI088' }],
+      optionalServices: [NUS_SERVICE]
+    });
+
+    status.textContent = 'Connecting...';
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(NUS_SERVICE);
+    const tx      = await service.getCharacteristic(NUS_TX);
+
+    await tx.startNotifications();
+    tx.addEventListener('characteristicvaluechanged', onData);
+
+    status.className = 'status connected';
+    status.textContent = 'Connected — ' + device.name;
+    btn.textContent = 'Disconnect';
+    btn.disabled = false;
+
+    device.addEventListener('gattserverdisconnected', () => {
+      status.className = 'status';
+      status.textContent = 'Disconnected';
+      btn.textContent = 'Connect';
+    });
+
+    btn.onclick = () => device.gatt.disconnect();
+
+  } catch (err) {
+    status.className = 'status error';
+    status.textContent = err.message || 'Connection failed';
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('connectBtn').onclick = connect;
+
+if (!navigator.bluetooth) {
+  document.getElementById('status').className = 'status error';
+  document.getElementById('status').textContent = 'Web Bluetooth not supported — use Chrome or Edge';
+  document.getElementById('connectBtn').disabled = true;
+}
+</script>
+</body>
+</html>

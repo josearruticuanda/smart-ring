@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AFE4404 · Pulse Oximetry Monitor</title>
+<style>
+  :root {
+    --bg:        #0a0c0e;
+    --panel:     #11151a;
+    --panel-2:   #161b22;
+    --line:      #20272f;
+    --line-soft: #1a2027;
+    --text:      #d6dde4;
+    --text-dim:  #6b7682;
+    --text-faint:#454e58;
+    --accent:    #34d3a6;   /* single restrained accent: instrument teal */
+    --pleth:     #34d3a6;
+    --spo2:      #5aa9e6;
+    --warn:      #d98a4b;
+    --beat:      #e8eef4;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  /* ---- Top bar ---- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .brand {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+  .brand .title {
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text);
+    font-weight: 600;
+  }
+  .brand .sub {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    font-family: var(--mono);
+  }
+  .spacer { flex: 1; }
+
+  .session {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    text-align: right;
+    line-height: 1.5;
+  }
+  .session .clock { color: var(--text); }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    padding: 7px 12px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--panel-2);
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-faint);
+    transition: background 0.2s;
+  }
+  .status-pill.live .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .status-pill.live { color: var(--text); }
+  .status-pill.error .dot { background: var(--warn); }
+  .status-pill.error { color: var(--warn); }
+
+  button.connect {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--bg);
+    background: var(--accent);
+    border: none;
+    padding: 9px 18px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: opacity 0.15s;
+  }
+  button.connect:hover { opacity: 0.88; }
+  button.connect.secondary {
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--line);
+  }
+  button.connect:disabled { opacity: 0.4; cursor: default; }
+
+  /* ---- Main grid ---- */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 1px;
+    background: var(--line);
+    min-height: 0;
+  }
+  .waveforms {
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-height: 0;
+  }
+  .trace {
+    position: relative;
+    background: var(--panel);
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .trace canvas { display: block; width: 100%; height: 100%; }
+  .trace .tag {
+    position: absolute;
+    top: 10px; left: 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    pointer-events: none;
+  }
+  .trace .tag b { color: var(--text); font-weight: 600; }
+  .trace .scale {
+    position: absolute;
+    top: 10px; right: 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    pointer-events: none;
+  }
+
+  /* ---- Side rail ---- */
+  .rail {
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow-y: auto;
+  }
+  .vital {
+    background: var(--panel);
+    padding: 14px 18px 16px;
+    position: relative;
+  }
+  .vital .head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .vital .name {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .vital .unit {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+  }
+  .vital .read {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    color: var(--text);
+  }
+  .vital.primary .read { font-size: 56px; }
+  .vital.primary { padding-bottom: 18px; }
+  .vital .read.big   { font-size: 38px; }
+  .vital .read.med   { font-size: 26px; }
+  .vital .read .sm   { font-size: 0.5em; color: var(--text-dim); margin-left: 4px; }
+  .vital.hr  .read { color: var(--accent); }
+  .vital.spo2 .read { color: var(--spo2); }
+
+  .vital .foot {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 8px;
+  }
+
+  /* heartbeat indicator */
+  .beat-led {
+    position: absolute;
+    top: 16px; right: 18px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--text-faint);
+    transition: none;
+  }
+  .beat-led.flash {
+    background: var(--beat);
+    box-shadow: 0 0 12px var(--beat);
+  }
+
+  .dual {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--line);
+  }
+  .dual .vital { background: var(--panel); }
+
+  /* small inline trend sparkbars for HRV/resp not essential; keep minimal */
+  .meta {
+    background: var(--panel);
+    padding: 14px 18px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.9;
+    flex: 1;
+  }
+  .meta .row { display: flex; justify-content: space-between; }
+  .meta .row span:last-child { color: var(--text); }
+  .meta .row.muted span:last-child { color: var(--text-faint); }
+
+  footer {
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+    padding: 8px 22px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    display: flex;
+    gap: 24px;
+    align-items: center;
+  }
+  footer .k { color: var(--text-dim); }
+
+  /* empty state overlay */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(10,12,14,0.82);
+    text-align: center;
+    z-index: 5;
+  }
+  .overlay .big {
+    font-size: 15px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+  }
+  .overlay .small {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-faint);
+    max-width: 360px;
+    line-height: 1.6;
+  }
+  .overlay.hidden { display: none; }
+
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; }
+    .rail { flex-direction: row; flex-wrap: wrap; }
+    .vital.primary .read { font-size: 44px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="title">Pulse Oximetry Monitor</span>
+    <span class="sub">AFE4404 · PPG / SpO₂ / HRV</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="session">
+    <div class="clock" id="elapsed">00:00:00</div>
+    <div id="rate">— Hz</div>
+  </div>
+  <div class="status-pill" id="statusPill">
+    <span class="dot"></span><span id="statusText">Disconnected</span>
+  </div>
+  <button class="connect" id="connectBtn">Connect</button>
+</header>
+
+<main>
+  <section class="waveforms">
+    <div class="trace" id="plethTrace">
+      <canvas id="plethCanvas"></canvas>
+      <div class="tag">PLETH · <b>IR</b></div>
+      <div class="scale" id="plethScale">auto</div>
+      <div class="overlay" id="overlay">
+        <div class="big">No device connected</div>
+        <div class="small">Connect to <b>AFE-HRM</b> over Bluetooth to begin streaming. Requires Chrome or Edge with Web Bluetooth.</div>
+      </div>
+    </div>
+    <div class="trace" id="redTrace" style="flex:0.55;">
+      <canvas id="redCanvas"></canvas>
+      <div class="tag">PLETH · <b>RED</b></div>
+    </div>
+  </section>
+
+  <aside class="rail">
+    <div class="vital primary hr">
+      <div class="beat-led" id="beatLed"></div>
+      <div class="head"><span class="name">Heart Rate</span><span class="unit">bpm</span></div>
+      <div class="read" id="hrValue">--</div>
+      <div class="foot" id="hrFoot">awaiting pulse</div>
+    </div>
+
+    <div class="vital spo2">
+      <div class="head"><span class="name">SpO₂</span><span class="unit">%</span></div>
+      <div class="read big" id="spo2Value">--</div>
+      <div class="foot" id="spo2Foot">need stable signal</div>
+    </div>
+
+    <div class="dual">
+      <div class="vital">
+        <div class="head"><span class="name">SDNN</span><span class="unit">ms</span></div>
+        <div class="read med" id="sdnnValue">--</div>
+      </div>
+      <div class="vital">
+        <div class="head"><span class="name">RMSSD</span><span class="unit">ms</span></div>
+        <div class="read med" id="rmssdValue">--</div>
+      </div>
+    </div>
+
+    <div class="vital">
+      <div class="head"><span class="name">Respiration</span><span class="unit">br/min</span></div>
+      <div class="read med" id="respValue">--</div>
+      <div class="foot" id="respFoot">tracking baseline</div>
+    </div>
+
+    <div class="meta">
+      <div class="row"><span>Stress index</span><span id="stressValue">--</span></div>
+      <div class="row"><span>Ambient (raw)</span><span id="ambValue">--</span></div>
+      <div class="row"><span>Last beat</span><span id="lastBeat">--</span></div>
+      <div class="row muted"><span>Beats counted</span><span id="beatCount">0</span></div>
+      <div class="row muted"><span>Packets</span><span id="pktCount">0</span></div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span><span class="k">Device</span> AFE-HRM</span>
+  <span><span class="k">Service</span> Nordic UART</span>
+  <span><span class="k">Signal</span> <span id="sigState">—</span></span>
+  <div class="spacer" style="flex:1"></div>
+  <span id="warnText" style="color:var(--warn)"></span>
+</footer>
+
+<script>
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_TX      = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+
+// ---------- Waveform renderer (scrolling strip-chart) ----------
+class Strip {
+  constructor(canvas, color, opts = {}) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.color = color;
+    this.cap = opts.cap || 600;       // samples held
+    this.data = new Float32Array(this.cap).fill(NaN);
+    this.beats = new Uint8Array(this.cap);
+    this.head = 0;
+    this.min = 0; this.max = 1;
+    this.grid = opts.grid !== false;
+    this.dpr = Math.max(1, window.devicePixelRatio || 1);
+    this.resize();
+  }
+  resize() {
+    const r = this.canvas.getBoundingClientRect();
+    this.canvas.width  = Math.max(1, Math.floor(r.width  * this.dpr));
+    this.canvas.height = Math.max(1, Math.floor(r.height * this.dpr));
+  }
+  push(v, beat) {
+    this.data[this.head] = v;
+    this.beats[this.head] = beat ? 1 : 0;
+    this.head = (this.head + 1) % this.cap;
+  }
+  draw() {
+    const ctx = this.ctx, W = this.canvas.width, H = this.canvas.height, dpr = this.dpr;
+    ctx.clearRect(0, 0, W, H);
+
+    // grid
+    if (this.grid) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.035)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      const cols = 6, rows = 3;
+      for (let i = 1; i < cols; i++) { const x = (W/cols)*i; ctx.moveTo(x,0); ctx.lineTo(x,H); }
+      for (let i = 1; i < rows; i++) { const y = (H/rows)*i; ctx.moveTo(0,y); ctx.lineTo(W,y); }
+      ctx.stroke();
+    }
+
+    // autoscale over the visible window (robust to slow DC drift)
+    let mn = Infinity, mx = -Infinity, any = false;
+    for (let i = 0; i < this.cap; i++) {
+      const v = this.data[i];
+      if (!isNaN(v)) { any = true; if (v < mn) mn = v; if (v > mx) mx = v; }
+    }
+    if (!any) return;
+    if (mx - mn < 1e-6) { mx = mn + 1; }
+    // ease the scale so it doesn't jitter every frame
+    this.min += (mn - this.min) * 0.2;
+    this.max += (mx - this.max) * 0.2;
+    const range = (this.max - this.min) || 1;
+    const pad = H * 0.12;
+    const yOf = v => H - pad - ((v - this.min) / range) * (H - 2*pad);
+
+    // beat markers first (under the line)
+    for (let i = 0; i < this.cap; i++) {
+      const idx = (this.head + i) % this.cap;
+      if (this.beats[idx]) {
+        const x = (i / (this.cap - 1)) * W;
+        ctx.strokeStyle = 'rgba(232,238,244,0.18)';
+        ctx.lineWidth = 1 * dpr;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      }
+    }
+
+    // trace
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = 1.6 * dpr;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < this.cap; i++) {
+      const idx = (this.head + i) % this.cap;
+      const v = this.data[idx];
+      if (isNaN(v)) { started = false; continue; }
+      const x = (i / (this.cap - 1)) * W;
+      const y = yOf(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+
+    // leading-edge dot
+    const lastIdx = (this.head - 1 + this.cap) % this.cap;
+    const lv = this.data[lastIdx];
+    if (!isNaN(lv)) {
+      const x = W - 1, y = yOf(lv);
+      ctx.fillStyle = this.color;
+      ctx.beginPath(); ctx.arc(x, y, 2.2*dpr, 0, Math.PI*2); ctx.fill();
+    }
+  }
+}
+
+const pleth = new Strip(document.getElementById('plethCanvas'), getCSS('--pleth'));
+const redS  = new Strip(document.getElementById('redCanvas'),  getCSS('--spo2'));
+function getCSS(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+function renderLoop() {
+  pleth.draw();
+  redS.draw();
+  requestAnimationFrame(renderLoop);
+}
+requestAnimationFrame(renderLoop);
+
+window.addEventListener('resize', () => { pleth.resize(); redS.resize(); });
+
+// ---------- State + DOM ----------
+const el = id => document.getElementById(id);
+let pktCount = 0, beatCount = 0;
+let startTime = null, lastPktTime = 0, rateEMA = 0;
+let lastBeatMs = null;
+
+function setStatus(state, text) {
+  const pill = el('statusPill');
+  pill.className = 'status-pill' + (state ? ' ' + state : '');
+  el('statusText').textContent = text;
+}
+
+function fmtElapsed(ms) {
+  const s = Math.floor(ms/1000);
+  const hh = String(Math.floor(s/3600)).padStart(2,'0');
+  const mm = String(Math.floor((s%3600)/60)).padStart(2,'0');
+  const ss = String(s%60).padStart(2,'0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+setInterval(() => {
+  if (startTime) el('elapsed').textContent = fmtElapsed(Date.now() - startTime);
+}, 250);
+
+// beat LED auto-off
+let beatLedTimer = null;
+function flashBeat() {
+  const led = el('beatLed');
+  led.classList.add('flash');
+  clearTimeout(beatLedTimer);
+  beatLedTimer = setTimeout(() => led.classList.remove('flash'), 110);
+}
+
+// ---------- Packet parsing ----------
+// CSV: ir,red,amb,bpm_x10,spo2,sdnn,rmssd,stress,resp_x10,beat
+let buffer = '';
+function onData(event) {
+  const chunk = new TextDecoder().decode(event.target.value);
+  buffer += chunk;
+  const lines = buffer.split('\n');
+  buffer = lines.pop();
+  for (const line of lines) parseLine(line);
+}
+
+function parseLine(line) {
+  const p = line.trim().split(',');
+  if (p.length !== 10) return;
+  const ir = +p[0], red = +p[1], amb = +p[2];
+  const bpm = (+p[3])/10, spo2 = +p[4];
+  const sdnn = +p[5], rmssd = +p[6], stress = +p[7];
+  const resp = (+p[8])/10, beat = +p[9];
+  if ([ir,red,amb,bpm,spo2].some(Number.isNaN)) return;
+
+  // rate estimate
+  const now = performance.now();
+  if (lastPktTime) {
+    const inst = 1000 / (now - lastPktTime);
+    rateEMA = rateEMA ? rateEMA*0.9 + inst*0.1 : inst;
+    el('rate').textContent = rateEMA.toFixed(0) + ' Hz';
+  }
+  lastPktTime = now;
+
+  pktCount++;
+  el('pktCount').textContent = pktCount;
+
+  // waveforms
+  pleth.push(ir, beat);
+  redS.push(red, false);
+
+  // beat handling
+  if (beat) {
+    beatCount++;
+    el('beatCount').textContent = beatCount;
+    flashBeat();
+    const nowMs = Date.now();
+    if (lastBeatMs) el('lastBeat').textContent = (nowMs - lastBeatMs) + ' ms';
+    lastBeatMs = nowMs;
+  }
+
+  // vitals
+  el('hrValue').textContent   = bpm > 0 ? bpm.toFixed(0) : '--';
+  el('hrFoot').textContent    = bpm > 0 ? 'pulse locked' : 'awaiting pulse';
+  el('spo2Value').textContent = spo2 > 0 ? spo2 : '--';
+  el('spo2Foot').textContent  = spo2 > 0 ? 'SaO₂ estimate' : 'need stable signal';
+  el('sdnnValue').textContent  = sdnn  > 0 ? sdnn  : '--';
+  el('rmssdValue').textContent = rmssd > 0 ? rmssd : '--';
+  el('respValue').textContent  = resp  > 0 ? resp.toFixed(0) : '--';
+  el('respFoot').textContent   = resp  > 0 ? 'from PPG envelope' : 'tracking baseline';
+  el('stressValue').textContent = (rmssd > 0) ? stress : '--';
+  el('ambValue').textContent  = amb;
+
+  // signal quality heuristic: ambient should be low+stable with good contact
+  const sig = el('sigState'), warn = el('warnText');
+  if (Math.abs(amb) > 40000) {
+    sig.textContent = 'poor contact'; sig.style.color = getCSS('--warn');
+    warn.textContent = 'High ambient — reseat finger';
+  } else if (bpm > 0) {
+    sig.textContent = 'good'; sig.style.color = getCSS('--accent');
+    warn.textContent = '';
+  } else {
+    sig.textContent = 'searching'; sig.style.color = getCSS('--text-dim');
+    warn.textContent = '';
+  }
+}
+
+// ---------- Bluetooth ----------
+let device = null;
+async function connect() {
+  const btn = el('connectBtn');
+  try {
+    btn.disabled = true;
+    setStatus('', 'Scanning…');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'AFE-HRM' }],
+      optionalServices: [NUS_SERVICE]
+    });
+    setStatus('', 'Connecting…');
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(NUS_SERVICE);
+    const tx      = await service.getCharacteristic(NUS_TX);
+    await tx.startNotifications();
+    tx.addEventListener('characteristicvaluechanged', onData);
+
+    setStatus('live', 'Live · ' + device.name);
+    el('overlay').classList.add('hidden');
+    btn.textContent = 'Disconnect';
+    btn.classList.add('secondary');
+    btn.disabled = false;
+    startTime = Date.now();
+
+    device.addEventListener('gattserverdisconnected', onDisconnect);
+    btn.onclick = () => device.gatt.disconnect();
+  } catch (err) {
+    setStatus('error', err.message ? err.message.slice(0, 40) : 'Connection failed');
+    btn.disabled = false;
+  }
+}
+
+function onDisconnect() {
+  setStatus('', 'Disconnected');
+  const btn = el('connectBtn');
+  btn.textContent = 'Connect';
+  btn.classList.remove('secondary');
+  btn.onclick = connect;
+  el('overlay').classList.remove('hidden');
+  el('rate').textContent = '— Hz';
+  el('sigState').textContent = '—';
+  startTime = null;
+  lastPktTime = 0;
+  rateEMA = 0;
+}
+
+el('connectBtn').onclick = connect;
+
+if (!navigator.bluetooth) {
+  setStatus('error', 'Web Bluetooth unsupported');
+  el('connectBtn').disabled = true;
+  el('overlay').querySelector('.small').textContent =
+    'This browser does not support Web Bluetooth. Open in Chrome or Edge on desktop or Android.';
+}
+</script>
+</body>
+</html>
